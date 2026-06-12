@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import hmac
 import hashlib
@@ -21,6 +22,15 @@ BRAND_NAME = os.environ.get("BRAND_NAME", "Pearl Street Insurance")
 AGENT_NAME = os.environ.get("AGENT_NAME", "Antoine McDonald")
 AGENT_PHONE = os.environ.get("AGENT_PHONE", "720-603-8685")
 AGENT_ADDRESS = os.environ.get("AGENT_ADDRESS", "9670 Dallas Street, Henderson, CO")
+AGENT_LICENSE = os.environ.get("AGENT_LICENSE", "")
+
+# Promotional hook shown on the landing page. Framed as "no purchase
+# necessary" so it's a giveaway, not an inducement to buy (avoids
+# insurance anti-rebating issues). Set to "" to hide entirely.
+INCENTIVE_TEXT = os.environ.get(
+    "INCENTIVE_TEXT",
+    "\U0001F381 Request your free quote and we'll send you a free Pearl Street pen - no purchase necessary!",
+)
 
 SMTP_USER = os.environ.get("SMTP_USER", "tonwondun@gmail.com")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
@@ -47,7 +57,7 @@ if not SMTP_PASS:
 # ================= DATABASE (SQLAlchemy ORM) =================
 Base = declarative_base()
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 class Lead(Base):
@@ -132,12 +142,17 @@ LANDING_PAGE = """
         .subtitle { text-align: center; color: #7f8c8d; margin-bottom: 15px; font-size: 14px; }
         .trust-bar { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 20px; }
         .trust-bar span { background: #eaf4fc; color: #2c80b4; font-size: 12px; padding: 4px 10px; border-radius: 12px; }
+        .incentive { background: #fff7e0; border: 1px solid #ffe2a8; color: #8a6300; font-size: 13px; text-align: center; padding: 8px 12px; border-radius: 6px; margin-bottom: 15px; }
         input, select { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
         button { background: #3498db; color: white; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 16px; }
         button:hover { background: #2980b9; }
         .error { color: red; }
         .success { color: green; }
+        .consent-text { font-size: 12px; color: #7f8c8d; line-height: 1.4; }
         .contact { text-align: center; margin-top: 18px; font-size: 13px; color: #7f8c8d; }
+        .footer-links { text-align: center; margin-top: 8px; font-size: 12px; color: #aaa; }
+        .footer-links a { color: #7f8c8d; }
+        .honeypot { position: absolute !important; left: -9999px !important; width: 1px; height: 1px; overflow: hidden; }
         /* Chat widget */
         #chat-bubble { position: fixed; bottom: 20px; right: 20px; width: 56px; height: 56px; border-radius: 50%; background: #3498db; color: white; display: flex; align-items: center; justify-content: center; font-size: 26px; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000; }
         #chat-panel { position: fixed; bottom: 86px; right: 20px; width: 320px; max-height: 420px; background: white; border-radius: 10px; box-shadow: 0 2px 16px rgba(0,0,0,0.25); display: none; flex-direction: column; overflow: hidden; z-index: 1000; }
@@ -161,6 +176,9 @@ LANDING_PAGE = """
         <span>Free Consultations</span>
         <span>Based in Henderson, CO</span>
     </div>
+    {% if incentive_text %}
+    <div class="incentive">{{ incentive_text }}</div>
+    {% endif %}
     <form id="quoteForm">
         <input type="text" id="first_name" placeholder="First Name" required>
         <input type="text" id="last_name" placeholder="Last Name" required>
@@ -173,11 +191,23 @@ LANDING_PAGE = """
         <select id="urgency" required>
             <option value="">Urgency</option><option>High</option><option>Medium</option><option>Low</option>
         </select>
-        <label><input type="checkbox" id="consent" required> I agree to be contacted</label>
+        <div class="honeypot" aria-hidden="true">
+            <label>Leave blank: <input type="text" id="website" name="website" tabindex="-1" autocomplete="off"></label>
+        </div>
+        <label class="consent-text"><input type="checkbox" id="consent" required style="width:auto;display:inline;margin-right:6px;">
+            I agree to be contacted by {{ brand_name }} by phone, text, and email about insurance products
+            and quotes, including by automatic dialing or pre-recorded messages. Consent is not a condition
+            of purchase. Message and data rates may apply. You can opt out anytime by replying STOP or using
+            the unsubscribe link in any email we send.
+        </label>
         <button type="submit">Get Quote</button>
     </form>
     <div id="message"></div>
     <div class="contact">Or call/text {{ agent_phone }} &middot; {{ agent_address }}</div>
+    <div class="footer-links">
+        <a href="/privacy">Privacy Policy &amp; Terms</a>
+        {% if agent_license %} &middot; CO Producer License #{{ agent_license }}{% endif %}
+    </div>
 </div>
 
 <div id="chat-bubble">&#128172;</div>
@@ -200,7 +230,8 @@ LANDING_PAGE = """
             phone: document.getElementById('phone').value,
             insurance_type: document.getElementById('insurance_type').value,
             urgency: document.getElementById('urgency').value,
-            consent: document.getElementById('consent').checked
+            consent: document.getElementById('consent').checked,
+            website: document.getElementById('website').value
         };
         const response = await fetch('/webhook', {
             method: 'POST',
@@ -269,6 +300,84 @@ LANDING_PAGE = """
 """
 
 
+PRIVACY_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Privacy Policy &amp; Terms - {{ brand_name }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f0f2f5; color: #2c3e50; }
+        .container { max-width: 650px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { font-size: 22px; }
+        h2 { font-size: 16px; margin-top: 24px; }
+        p, li { font-size: 14px; line-height: 1.6; }
+        a { color: #2c80b4; }
+        .back { display: inline-block; margin-bottom: 16px; font-size: 13px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="/">&larr; Back to quote form</a>
+    <h1>Privacy Policy &amp; Terms of Use</h1>
+    <p>{{ brand_name }} ("we," "us," or "our") respects your privacy. This page explains what
+    information we collect through this site, how we use it, and your choices.</p>
+
+    <h2>Information We Collect</h2>
+    <p>When you request a quote, we collect your name, email address, phone number, the type of
+    insurance you're interested in, and how urgently you need coverage.</p>
+
+    <h2>How We Use Your Information</h2>
+    <ul>
+        <li>To prepare and deliver an insurance quote</li>
+        <li>To contact you by phone, text, or email about your request, including follow-up messages</li>
+        <li>To improve our services and respond to questions</li>
+    </ul>
+    <p>We do not sell your personal information to third parties.</p>
+
+    <h2>Communication Consent (TCPA)</h2>
+    <p>By submitting the quote form, you consent to be contacted by {{ brand_name }} by phone, text
+    message, or email, including by automatic telephone dialing systems or pre-recorded messages,
+    regarding insurance products and quotes. Consent is not required as a condition of purchasing
+    any product or service. Message and data rates may apply. Carriers are not liable for delayed or
+    undelivered messages. You may opt out at any time by replying STOP to a text, or by using the
+    unsubscribe link included in our emails.</p>
+
+    <h2>Email Practices (CAN-SPAM)</h2>
+    <p>Every marketing email we send includes our physical business address ({{ agent_address }}) and
+    a working unsubscribe link. We honor opt-out requests promptly.</p>
+
+    <h2>Your Privacy Choices</h2>
+    <p>You can request access to, correction of, or deletion of your information, or withdraw consent
+    to be contacted, at any time by emailing {{ owner_email }} or calling {{ agent_phone }}.</p>
+
+    <h2>Promotional Offers</h2>
+    <p>Any free promotional item offered on this site (such as a branded pen) is available to anyone
+    who requests a quote, regardless of whether you purchase a policy, and while supplies last.</p>
+
+    <h2>Licensing</h2>
+    <p>{{ brand_name }} is a licensed insurance agency operating in Colorado.{% if agent_license %} Producer License #{{ agent_license }}.{% endif %}</p>
+
+    <h2>Contact Us</h2>
+    <p>{{ brand_name }}<br>{{ agent_address }}<br>{{ agent_phone }}<br>{{ owner_email }}</p>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route('/privacy')
+def privacy():
+    return render_template_string(
+        PRIVACY_PAGE,
+        brand_name=BRAND_NAME,
+        agent_phone=AGENT_PHONE,
+        agent_address=AGENT_ADDRESS,
+        agent_license=AGENT_LICENSE,
+        owner_email=OWNER_EMAIL,
+    )
+
+
 @app.route('/')
 def landing():
     return render_template_string(
@@ -276,15 +385,46 @@ def landing():
         brand_name=BRAND_NAME,
         agent_phone=AGENT_PHONE,
         agent_address=AGENT_ADDRESS,
+        incentive_text=INCENTIVE_TEXT,
+        agent_license=AGENT_LICENSE,
     )
+
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+REQUIRED_FIELDS = ["first_name", "last_name", "email", "phone", "insurance_type", "urgency"]
+VALID_INSURANCE_TYPES = {"Auto", "Home", "Renters", "Life", "Business"}
+VALID_URGENCY = {"High", "Medium", "Low"}
 
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        data = request.json
+        data = request.json or {}
+
+        # Honeypot: bots fill every field, including this hidden one.
+        # Pretend success so the bot doesn't learn to skip it.
+        if data.get('website'):
+            logging.info("Honeypot triggered - discarding submission")
+            return jsonify({"message": "Lead received. Check your email to confirm.", "lead_id": None}), 200
+
         if not data.get('consent'):
             return jsonify({"error": "Consent is required"}), 400
+
+        missing = [f for f in REQUIRED_FIELDS if not str(data.get(f, "")).strip()]
+        if missing:
+            return jsonify({"error": f"Missing required field(s): {', '.join(missing)}"}), 400
+
+        if not EMAIL_RE.match(data['email'].strip()):
+            return jsonify({"error": "Please enter a valid email address"}), 400
+
+        if len(re.sub(r"\D", "", data['phone'])) < 10:
+            return jsonify({"error": "Please enter a valid 10-digit phone number"}), 400
+
+        if data['insurance_type'] not in VALID_INSURANCE_TYPES:
+            return jsonify({"error": "Invalid insurance type"}), 400
+
+        if data['urgency'] not in VALID_URGENCY:
+            return jsonify({"error": "Invalid urgency"}), 400
 
         db = SessionLocal()
         existing = db.query(Lead).filter(Lead.email == data['email']).first()
