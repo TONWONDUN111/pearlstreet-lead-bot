@@ -1,8 +1,8 @@
-import sqlite3
 import smtplib
 import time
 import threading
 import logging
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify, render_template_string
@@ -12,16 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import schedule
 import requests
-import json
 
 # ================= CONFIGURATION =================
-SMTP_USER = "tonwondun@gmail.com"
-SMTP_PASS = "***REMOVED***"
-PUBLIC_URL = "https://hypercatalectic-homopterous-chu.ngrok-free.dev -> http://localhost:5000source venv/bin/activate
-python enterprise_bot.py
-source venv/bin/activate
-python enterprise_bot.py
-"  # Your ngrok URL
+SMTP_USER = os.environ.get("SMTP_USER", "tonwondun@gmail.com")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:5000")
 DATABASE_URL = "sqlite:///pearl_street_leads.db"
 LOG_FILE = "enterprise.log"
 
